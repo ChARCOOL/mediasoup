@@ -27,6 +27,9 @@
 /worker/fuzzer/new-corpus/*
 !/worker/fuzzer/new-corpus/.placeholder
 
+## Local agent ledger.
+/.hermes-ledger
+
 ## Others.
 /coverage
 /.cache
