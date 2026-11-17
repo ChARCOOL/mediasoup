@@ -51,6 +51,11 @@ const ctx: TestContext = {
 			},
 			rtcpFeedback: [], // Will be ignored.
 		},
+		{
+			kind: 'video',
+			mimeType: 'video/AV1',
+			clockRate: 90000,
+		},
 	]),
 	audioProducerOptions: utils.deepFreeze<mediasoup.types.ProducerOptions>({
 		kind: 'audio',
@@ -629,6 +634,64 @@ test('transport.produce() with multiple encodings is of type simulcast', async (
 	});
 
 	expect(producer.type).toBe('simulcast');
+}, 2000);
+
+test('transport.produce() with AV1 and two rids is simulcast and can be consumed', async () => {
+	const producer = await ctx.webRtcTransport1!.produce({
+		kind: 'video',
+		rtpParameters: {
+			mid: 'AV1-VIDEO',
+			codecs: [
+				{
+					mimeType: 'video/AV1',
+					payloadType: 96,
+					clockRate: 90000,
+					rtcpFeedback: [{ type: 'nack' }, { type: 'goog-remb' }],
+				},
+			],
+			headerExtensions: [
+				{
+					uri: 'urn:ietf:params:rtp-hdrext:sdes:mid',
+					id: 1,
+				},
+				{
+					uri: 'urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id',
+					id: 2,
+				},
+			],
+			encodings: [
+				{ rid: 'r0', maxBitrate: 100000 },
+				{ rid: 'r1', maxBitrate: 500000 },
+			],
+			rtcp: { cname: 'av1-video' },
+		},
+	});
+
+	// Two AV1 encodings are classified as SIMULCAST and pass the worker gate.
+	expect(producer.type).toBe('simulcast');
+	expect(producer.rtpParameters.codecs[0]!.mimeType).toBe('video/AV1');
+	expect(producer.rtpParameters.encodings).toHaveLength(2);
+
+	const dump = await producer.dump();
+
+	expect(dump.type).toBe('simulcast');
+	expect(dump.rtpMapping.encodings).toMatchObject([
+		{ rid: 'r0' },
+		{ rid: 'r1' },
+	]);
+
+	// The equivalent AV1 simulcast Consumer is accepted as well. A simulcast
+	// Consumer forwards one stream and exposes the two spatial layers through a
+	// single L2 scalability mode rather than two separate encodings.
+	const consumer = await ctx.webRtcTransport2!.consume({
+		producerId: producer.id,
+		rtpCapabilities: ctx.router!.rtpCapabilities,
+	});
+
+	expect(consumer.type).toBe('simulcast');
+	expect(consumer.rtpParameters.codecs[0]!.mimeType).toBe('video/AV1');
+	expect(consumer.rtpParameters.encodings).toHaveLength(1);
+	expect(consumer.rtpParameters.encodings![0]!.scalabilityMode).toMatch(/^L2T/);
 }, 2000);
 
 test('producer.dump() succeeds', async () => {

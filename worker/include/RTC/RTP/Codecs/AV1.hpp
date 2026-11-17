@@ -26,6 +26,53 @@ namespace RTC
 				  RTP::Packet* packet, Codecs::DependencyDescriptor::Context& dependencyDescriptorContext);
 
 			public:
+				/**
+				 * Payload descriptor handler for an AV1 packet that carries no Dependency
+				 * Descriptor. Such a packet tells neither its layers nor whether it is a key
+				 * frame, so it is forwarded unfiltered and reported as a key frame. This way a
+				 * stream with no Dependency Descriptor never gates a simulcast spatial layer
+				 * switch, which would otherwise wait forever for a key frame it cannot signal.
+				 */
+				class NoDependencyDescriptorHandler : public Codecs::PayloadDescriptorHandler
+				{
+				public:
+					void Dump(int /* indentation */) const override
+					{
+					}
+
+					bool Process(
+					  Codecs::EncodingContext* /* encodingContext */,
+					  RTP::Packet* /* packet */,
+					  bool& /* marker */) override
+					{
+						return true;
+					}
+
+					void Encode(RTP::Packet* /* packet */, Codecs::PayloadDescriptor::Encoder* /* encoder */) override
+					{
+					}
+
+					void Restore(RTP::Packet* /* packet */) override
+					{
+					}
+
+					uint8_t GetSpatialLayer() const override
+					{
+						return 0;
+					}
+
+					uint8_t GetTemporalLayer() const override
+					{
+						return 0;
+					}
+
+					bool IsKeyFrame() const override
+					{
+						return true;
+					}
+				};
+
+			public:
 				class EncodingContext : public Codecs::EncodingContext
 				{
 				public:

@@ -18,14 +18,18 @@ namespace RTC
 			{
 				MS_TRACE();
 
-				// NOTE: Nothing but the Dependency Descriptor tells the layers of an AV1
-				// packet, so without it the packet gets no payload descriptor handler at
-				// all and is forwarded as it comes.
 				auto* const payloadDescriptor =
 				  DependencyDescriptorPayloadDescriptor::Parse(packet, dependencyDescriptorContext);
 
+				// Nothing but the Dependency Descriptor tells the layers of an AV1 packet.
+				// Without one there are no layers to filter and no key frame to signal, so give
+				// the packet the passthrough handler. It forwards the packet unfiltered and
+				// reports it as a key frame, so a stream without a Dependency Descriptor cannot
+				// gate a simulcast spatial layer switch that would wait for a key frame forever.
 				if (!payloadDescriptor)
 				{
+					packet->SetPayloadDescriptorHandler(new NoDependencyDescriptorHandler());
+
 					return;
 				}
 

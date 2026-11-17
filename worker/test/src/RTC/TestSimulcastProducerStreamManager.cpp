@@ -2,6 +2,7 @@
 #include "RTC/ConsumerTypes.hpp"
 #include "RTC/RTCP/packet/Packet.hpp"
 #include "RTC/RTCP/packet/SenderReportPacket.hpp"
+#include "RTC/RTP/Codecs/AV1.hpp"
 #include "RTC/RTP/Codecs/PayloadDescriptorHandler.hpp"
 #include "RTC/RTP/HeaderExtensionIds.hpp"
 #include "RTC/RTP/RtpStreamRecv.hpp"
@@ -464,6 +465,140 @@ SCENARIO("SimulcastProducerStreamManager", "[rtp][producerstreammanager][simulca
 		REQUIRE(result.spatialLayerSwitched == true);
 		REQUIRE(result.sendBufferedPackets == true);
 		REQUIRE(manager->GetCurrentSpatialLayer() == 1);
+	}
+
+	SECTION("AV1 with two encodings gates spatial layer switching on a keyframe")
+	{
+		MockListener listener;
+
+		// AV1 is now a valid simulcast codec, so its Consumer passes keyFrameSupported
+		// from CanBeKeyFrame(AV1), which is true, into the manager.
+		RTC::RTP::Codecs::EncodingContext::Params av1Params;
+
+		auto av1EncodingContext = std::make_unique<RTC::RTP::Codecs::AV1::EncodingContext>(av1Params);
+		auto manager            = createManager(
+		  std::addressof(listener),
+		  /*ssrcs*/ TwoSsrcs,
+		  /*preferredLayers*/ { 2, 2 },
+		  /*keyFrameSupported*/ true,
+		  /*kind*/ RTC::Media::Kind::VIDEO,
+		  /*encodingContext*/ std::move(av1EncodingContext));
+		auto rtpStream0 = createRtpStreamRecv(MappedSsrc0);
+		auto rtpStream1 = createRtpStreamRecv(MappedSsrc1);
+
+		manager->ProducerRtpStream(rtpStream0.get(), MappedSsrc0);
+		manager->ProducerRtpStream(rtpStream1.get(), MappedSsrc1);
+
+		// Both layers get a Sender Report so layer 1 can be aligned to layer 0.
+		receiveSenderReport(rtpStream0.get(), /*captureAtUs*/ 1000 * 1000, /*rtpTs*/ 1000);
+		receiveSenderReport(rtpStream1.get(), /*captureAtUs*/ 1000 * 1000, /*rtpTs*/ 1000);
+
+		// Sync on spatial layer 0 with a keyframe.
+		manager->UpdateTargetLayers(0, 0);
+
+		packet->SetSsrc(MappedSsrc0);
+		packet->SetSequenceNumber(1);
+
+		auto* handler0       = new MockPayloadDescriptorHandler();
+		handler0->isKeyFrame = true;
+		packet->SetPayloadDescriptorHandler(handler0);
+
+		manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		// Switch the target to layer 1.
+		manager->UpdateTargetLayers(1, 0);
+
+		// A non-keyframe from layer 1 is buffered, exactly as on the H264 path.
+		packet->SetSsrc(MappedSsrc1);
+		packet->SetSequenceNumber(1);
+
+		auto* nonKeyFrameHandler = new MockPayloadDescriptorHandler();
+
+		nonKeyFrameHandler->isKeyFrame = false;
+		packet->SetPayloadDescriptorHandler(nonKeyFrameHandler);
+
+		auto result = manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		REQUIRE(result.type == RTC::ProducerStreamManager::RtpPacketProcessResult::Type::BUFFER);
+
+		// A keyframe from layer 1 completes the switch and is forwarded.
+		packet->SetSequenceNumber(2);
+
+		auto* keyFrameHandler = new MockPayloadDescriptorHandler();
+
+		keyFrameHandler->isKeyFrame = true;
+		packet->SetPayloadDescriptorHandler(keyFrameHandler);
+
+		result = manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		REQUIRE(result.type == RTC::ProducerStreamManager::RtpPacketProcessResult::Type::FORWARD);
+		REQUIRE(result.isSyncPacket == true);
+		REQUIRE(result.spatialLayerSwitched == true);
+		REQUIRE(result.sendBufferedPackets == true);
+		REQUIRE(manager->GetCurrentSpatialLayer() == 1);
+	}
+
+	SECTION("an AV1 packet without a Dependency Descriptor does not block a spatial layer switch")
+	{
+		MockListener listener;
+		RTC::RTP::Codecs::EncodingContext::Params av1Params;
+
+		auto av1EncodingContext = std::make_unique<RTC::RTP::Codecs::AV1::EncodingContext>(av1Params);
+		auto manager            = createManager(
+		  std::addressof(listener),
+		  /*ssrcs*/ TwoSsrcs,
+		  /*preferredLayers*/ { 2, 2 },
+		  /*keyFrameSupported*/ true,
+		  /*kind*/ RTC::Media::Kind::VIDEO,
+		  /*encodingContext*/ std::move(av1EncodingContext));
+		auto rtpStream0 = createRtpStreamRecv(MappedSsrc0);
+		auto rtpStream1 = createRtpStreamRecv(MappedSsrc1);
+
+		manager->ProducerRtpStream(rtpStream0.get(), MappedSsrc0);
+		manager->ProducerRtpStream(rtpStream1.get(), MappedSsrc1);
+
+		receiveSenderReport(rtpStream0.get(), /*captureAtUs*/ 1000 * 1000, /*rtpTs*/ 1000);
+		receiveSenderReport(rtpStream1.get(), /*captureAtUs*/ 1000 * 1000, /*rtpTs*/ 1000);
+
+		// Complete the first sync on layer 0.
+		manager->UpdateTargetLayers(0, 0);
+
+		packet->SetSsrc(MappedSsrc0);
+		packet->SetSequenceNumber(1);
+
+		auto* handler0       = new MockPayloadDescriptorHandler();
+		handler0->isKeyFrame = true;
+		packet->SetPayloadDescriptorHandler(handler0);
+
+		manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		// Ask for layer 1. The next layer 1 packet carries no Dependency Descriptor.
+		manager->UpdateTargetLayers(1, 0);
+
+		RTC::RTP::Codecs::DependencyDescriptor::Context dependencyDescriptorContext;
+
+		packet->SetSsrc(MappedSsrc1);
+		packet->SetSequenceNumber(2);
+
+		// AV1 installs the passthrough handler on the no-Dependency-Descriptor
+		// path. It reports a key frame, so the switch must not be held back.
+		RTC::RTP::Codecs::AV1::ProcessRtpPacket(packet.get(), dependencyDescriptorContext);
+
+		REQUIRE(packet->IsKeyFrame());
+
+		auto result = manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		REQUIRE(result.type == RTC::ProducerStreamManager::RtpPacketProcessResult::Type::FORWARD);
+		REQUIRE(result.spatialLayerSwitched == true);
+		REQUIRE(manager->GetCurrentSpatialLayer() == 1);
+
+		// The packet is forwarded unfiltered: no descriptor bytes were written.
+		REQUIRE(packet->GetDependencyDescriptorMaxLength() == 0);
 	}
 
 	SECTION("ProcessRtpPacket() returns SILENT_DROP for non-target and non-current spatial layer packet")

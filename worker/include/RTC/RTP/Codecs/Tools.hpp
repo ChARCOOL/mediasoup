@@ -31,6 +31,9 @@ namespace RTC
 								case RTC::RtpCodecMimeType::Subtype::VP8:
 								case RTC::RtpCodecMimeType::Subtype::VP9:
 								case RTC::RtpCodecMimeType::Subtype::H264:
+								// AV1 tells key frames through the Dependency Descriptor, which its
+								// payload descriptor handler reads from the packet.
+								case RTC::RtpCodecMimeType::Subtype::AV1:
 								{
 									return true;
 								}
@@ -132,6 +135,10 @@ namespace RTC
 									{
 										case RTC::RtpCodecMimeType::Subtype::VP8:
 										case RTC::RtpCodecMimeType::Subtype::H264:
+										// AV1 has no payload descriptor of its own, but its
+										// Dependency Descriptor carries the layers of every
+										// simulcast stream, so it can be simulcast too.
+										case RTC::RtpCodecMimeType::Subtype::AV1:
 										{
 											return true;
 										}

@@ -70,16 +70,29 @@ SCENARIO("process AV1 RTP packet", "[rtp][codecs][av1]")
 		// The template dependency structure of the stream is kept for the delta
 		// frames that follow, which do not carry it.
 		REQUIRE(dependencyDescriptorContext.templateDependencyStructure);
+
+		// The Dependency Descriptor also tells that this is a key frame, which is
+		// what an AV1 SVC consumer still uses to sync on a key frame.
+		REQUIRE(packet->IsKeyFrame());
 	}
 
 	// Nothing but the Dependency Descriptor tells the layers of an AV1 packet,
-	// so without it there is nothing to process and the packet is forwarded just
-	// as it comes.
-	SECTION("a packet carrying no Dependency Descriptor gets no payload descriptor")
+	// so without it the packet gets the passthrough handler. That handler forwards
+	// it unfiltered and reports it as a key frame, so a stream with no Dependency
+	// Descriptor cannot gate a simulcast spatial layer switch.
+	SECTION("a packet carrying no Dependency Descriptor gets the passthrough handler")
 	{
 		RTC::RTP::Codecs::AV1::ProcessRtpPacket(packet.get(), dependencyDescriptorContext);
 
+		// No Dependency Descriptor means no descriptor bytes to rewrite and no
+		// template structure to retain, so nothing is filtered or changed.
 		REQUIRE(packet->GetDependencyDescriptorMaxLength() == 0);
 		REQUIRE(!dependencyDescriptorContext.templateDependencyStructure);
+
+		// The passthrough handler reports a key frame and no layers, which keeps
+		// an all-no-Dependency-Descriptor stream from deadlocking a switch.
+		REQUIRE(packet->IsKeyFrame());
+		REQUIRE(packet->GetSpatialLayer() == 0);
+		REQUIRE(packet->GetTemporalLayer() == 0);
 	}
 }

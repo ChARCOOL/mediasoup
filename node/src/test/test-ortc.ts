@@ -600,3 +600,98 @@ test('getProducerRtpParametersMapping() with RTX apt pointing to a non media cod
 		ortc.getProducerRtpParametersMapping(rtpParameters, routerRtpCapabilities)
 	).toThrow(TypeError);
 });
+
+test('AV1 simulcast with two rids maps to two encodings', () => {
+	const mediaCodecs: mediasoup.types.RouterRtpCodecCapability[] = [
+		{
+			kind: 'video',
+			mimeType: 'video/AV1',
+			clockRate: 90000,
+		},
+	];
+
+	const routerRtpCapabilities = ortc.generateRouterRtpCapabilities(mediaCodecs);
+
+	expect(
+		routerRtpCapabilities.codecs?.some(codec => codec.mimeType === 'video/AV1')
+	).toBe(true);
+
+	const rtpParameters: mediasoup.types.RtpParameters = {
+		codecs: [
+			{
+				mimeType: 'video/AV1',
+				payloadType: 96,
+				clockRate: 90000,
+				rtcpFeedback: [{ type: 'nack' }, { type: 'nack', parameter: 'pli' }],
+			},
+		],
+		headerExtensions: [
+			{
+				uri: 'urn:ietf:params:rtp-hdrext:sdes:mid',
+				id: 1,
+			},
+			{
+				uri: 'urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id',
+				id: 2,
+			},
+		],
+		encodings: [
+			{ rid: 'r0', maxBitrate: 100000 },
+			{ rid: 'r1', maxBitrate: 500000 },
+		],
+		rtcp: { cname: 'av1-video' },
+	};
+
+	const rtpMapping = ortc.getProducerRtpParametersMapping(
+		rtpParameters,
+		routerRtpCapabilities
+	);
+
+	expect(rtpMapping.encodings).toHaveLength(2);
+	expect(rtpMapping.encodings[0]!.rid).toBe('r0');
+	expect(rtpMapping.encodings[1]!.rid).toBe('r1');
+
+	const consumableRtpParameters = ortc.getConsumableRtpParameters(
+		'video',
+		rtpParameters,
+		routerRtpCapabilities,
+		rtpMapping
+	);
+
+	expect(consumableRtpParameters.codecs[0]!.mimeType).toBe('video/AV1');
+	expect(consumableRtpParameters.encodings).toHaveLength(2);
+
+	const remoteRtpCapabilities: mediasoup.types.RtpCapabilities = {
+		codecs: [
+			{
+				kind: 'video',
+				mimeType: 'video/AV1',
+				preferredPayloadType: 100,
+				clockRate: 90000,
+				parameters: {},
+				rtcpFeedback: [],
+			},
+		],
+		headerExtensions: [
+			{
+				kind: 'video',
+				uri: 'urn:ietf:params:rtp-hdrext:sdes:mid',
+				preferredId: 1,
+				preferredEncrypt: false,
+				direction: 'sendrecv',
+			},
+		],
+	};
+
+	const consumerRtpParameters = ortc.getConsumerRtpParameters({
+		consumableRtpParameters,
+		remoteRtpCapabilities,
+		pipe: false,
+		enableRtx: false,
+		enableBwe: false,
+	});
+
+	expect(consumerRtpParameters.codecs[0]!.mimeType).toBe('video/AV1');
+	expect(consumerRtpParameters.encodings).toHaveLength(1);
+	expect(consumerRtpParameters.encodings![0]!.scalabilityMode).toBe('L2T1');
+});

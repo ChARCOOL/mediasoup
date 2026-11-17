@@ -6,6 +6,7 @@
 - Worker: Don’t take a template dependency structure older than the one in use ([PR #2047](https://github.com/versatica/mediasoup/pull/2047)).
 - New RTCP stack ([task #2049](https://github.com/versatica/mediasoup/issues/2049)).
 - Worker: Rewrite the Dependency Descriptor frame numbers across stream switches ([PR #2048](https://github.com/versatica/mediasoup/pull/2048)).
+- Worker: Support simulcast with the AV1 codec ([issue #2011](https://github.com/versatica/mediasoup/issues/2011)).
 - Modernize C++ code ([PR #2060](https://github.com/versatica/mediasoup/pull/2060)):
   - Use `unique_ptr` instead of holding raw pointers.
   - `WebRtcTransport` and `WebRtcServer`: Use `announcedAddress` (it was missing).

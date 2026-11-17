@@ -1,6 +1,7 @@
 #include "common.hpp"
 #include "RTC/ConsumerTypes.hpp"
 #include "RTC/RTCP/packet/Packet.hpp"
+#include "RTC/RTP/Codecs/AV1.hpp"
 #include "RTC/RTP/Codecs/PayloadDescriptorHandler.hpp"
 #include "RTC/RTP/RtpStreamRecv.hpp"
 #include "RTC/SvcProducerStreamManager.hpp"
@@ -436,6 +437,61 @@ SCENARIO("SvcProducerStreamManager", "[rtp][producerstreammanager][svc]")
 
 		// Now a keyframe completes the sync.
 		const uint16_t seq{ 100 };
+		packet->SetSequenceNumber(seq);
+
+		auto* handler       = new MockPayloadDescriptorHandler();
+		handler->isKeyFrame = true;
+		packet->SetPayloadDescriptorHandler(handler);
+
+		result = manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		REQUIRE(result.type == RtpPacketProcessResult::Type::FORWARD);
+		REQUIRE(result.isSyncPacket == true);
+		REQUIRE(result.syncSeqValue == seq - 1);
+		REQUIRE(result.tsOffset == 0);
+		REQUIRE(result.sendBufferedPackets == true);
+	}
+
+	SECTION("AV1 SVC with spatial layers still switches on a keyframe")
+	{
+		MockListener listener;
+
+		// A single AV1 encoding with spatialLayers > 1 is classified SVC, and
+		// CanBeKeyFrame(AV1) being true makes its Consumer pass keyFrameSupported.
+		RTC::RTP::Codecs::EncodingContext::Params av1Params;
+
+		av1Params.spatialLayers  = 2;
+		av1Params.temporalLayers = 2;
+
+		auto av1EncodingContext = std::make_unique<RTC::RTP::Codecs::AV1::EncodingContext>(av1Params);
+		auto manager            = createManager(
+		  std::addressof(listener),
+		  /*preferredLayers*/ { 2, 2 },
+		  /*keyFrameSupported*/ true,
+		  /*kind*/ RTC::Media::Kind::VIDEO,
+		  /*encodingContext*/ std::move(av1EncodingContext));
+		auto rtpStream = createRtpStreamRecv(MappedSsrc, /*spatialLayers*/ 2, /*temporalLayers*/ 2);
+
+		manager->ProducerRtpStream(rtpStream.get(), MappedSsrc);
+		manager->UpdateTargetLayers(0, 0);
+
+		// SVC only asks for sync on transport connect or resume.
+		manager->OnTransportConnected();
+		manager->UpdateTargetLayers(0, 0);
+
+		// A non-keyframe must still be held while sync is required.
+		packet->SetSequenceNumber(1);
+
+		auto result = manager->ProcessRtpPacket(
+		  packet.get(), /*lastSentPacketHasMarker*/ false, /*clockRate*/ 90000, /*maxPacketTs*/ 0);
+
+		REQUIRE(result.type == RtpPacketProcessResult::Type::BUFFER);
+
+		// A keyframe still completes the sync, so AV1 SVC keeps switching on
+		// keyframes after CanBeKeyFrame(AV1) became true.
+		const uint16_t seq{ 100 };
+
 		packet->SetSequenceNumber(seq);
 
 		auto* handler       = new MockPayloadDescriptorHandler();
